@@ -25,7 +25,7 @@ private val DarkColorPalette = darkColors(
     onSurface = Purple40
 )
 
-// Light theme colors
+
 private val LightColorPalette = lightColors(
     primary = Purple40,
     secondary = PurpleGrey40,
