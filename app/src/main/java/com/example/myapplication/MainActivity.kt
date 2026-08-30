@@ -1,43 +1,40 @@
 package com.example.myapplication
 
 import android.Manifest
-import android.bluetooth.*
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.InputStream
-import java.io.OutputStream
-import java.util.*
+import com.example.myapplication.data.MessageEntity
+import com.example.myapplication.data.PeerEntity
+import com.example.myapplication.mesh.NodeIdProvider
+import com.example.myapplication.ui.MeshViewModel
+import com.example.myapplication.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
 
-    private var bluetoothAdapter: BluetoothAdapter? = null
-    private val discoveredDevices = mutableStateListOf<BluetoothDevice>()
-    private val uuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-    private val serverName = "MyBTService"
+    private val viewModel: MeshViewModel by viewModels()
 
     private val permissions = mutableListOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
-        Manifest.permission.ACCESS_COARSE_LOCATION
+        Manifest.permission.ACCESS_COARSE_LOCATION,
+        Manifest.permission.POST_NOTIFICATIONS
     ).apply {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             add(Manifest.permission.BLUETOOTH_CONNECT)
@@ -45,34 +42,20 @@ class MainActivity : ComponentActivity() {
         }
     }.toTypedArray()
 
-    private var connectedSocket: BluetoothSocket? = null
-    private var outputStream: OutputStream? = null
-    private var inputStream: InputStream? = null
-    private var serverSocket: BluetoothServerSocket? = null
-    private var listenJob: Job? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-        if (bluetoothAdapter == null) {
-            Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_SHORT).show()
-            finish()
+        checkPermissions {
+            // Permissions granted, Service is already started by ViewModel init
         }
 
-        setContent { BTCommUI() }
-    }
-
-    private fun hasBluetoothScanPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
-        } else true
-    }
-
-    private fun hasBluetoothConnectPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-        } else true
+        setContent {
+            MyApplicationTheme {
+                Surface(color = MaterialTheme.colors.background) {
+                    MeshApp(viewModel)
+                }
+            }
+        }
     }
 
     private fun checkPermissions(onGranted: () -> Unit) {
@@ -86,93 +69,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startDiscovery() {
-        if (!hasBluetoothScanPermission() || bluetoothAdapter == null) return
-
-        try {
-            bluetoothAdapter?.cancelDiscovery()
-
-            val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
-            registerReceiver(receiver, filter)
-
-            // SENSITIVE CALL: Handled by surrounding try-catch and hasBluetoothScanPermission() check
-            bluetoothAdapter?.startDiscovery()
-        } catch (e: SecurityException) {
-            Toast.makeText(this, "Bluetooth discovery permission error: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    /**
-     * Server-side function to start listening for incoming connections.
-     */
-    private fun startAcceptingConnections(onSuccess: (BluetoothSocket) -> Unit, onFail: (String) -> Unit) {
-        if (!hasBluetoothConnectPermission() || bluetoothAdapter == null) {
-            onFail("Error: BLUETOOTH_CONNECT permission missing.")
-            return
-        }
-
-        listenJob?.cancel()
-
-        try {
-            // SENSITIVE CALL: Handled by surrounding try-catch and hasBluetoothConnectPermission() check
-            serverSocket = bluetoothAdapter?.listenUsingRfcommWithServiceRecord(serverName, uuid)
-
-        } catch (e: SecurityException) {
-            onFail("Security error setting up server: ${e.message}")
-            return
-        } catch (e: Exception) {
-            onFail("Error setting up server: ${e.message}")
-            return
-        }
-
-        listenJob = lifecycleScope.launch(Dispatchers.IO) {
-            var socket: BluetoothSocket? = null
-            try {
-                // SENSITIVE CALL: Handled by surrounding try-catch and hasBluetoothConnectPermission() check
-                socket = serverSocket?.accept()
-
-                if (socket != null) {
-                    serverSocket?.close()
-                    withContext(Dispatchers.Main) { onSuccess(socket) }
-                }
-
-            } catch (e: Exception) {
-                // If the error is not due to the socket being closed/cancelled, report it.
-                if (e !is java.io.IOException || e.message?.contains("socket closed") == false) {
-                    withContext(Dispatchers.Main) { onFail("Server failed: ${e.message}") }
-                }
-            }
-        }
-    }
-
-    private val receiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == BluetoothDevice.ACTION_FOUND) {
-                if (!hasBluetoothScanPermission()) return
-
-                try {
-                    val device: BluetoothDevice? =
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                    device?.let {
-                        // device.name also requires BLUETOOTH_CONNECT on API 31+
-                        val deviceName = try { it.name } catch (_: SecurityException) { null }
-                        if (deviceName != null && !discoveredDevices.contains(it)) {
-                            discoveredDevices.add(it)
-                        }
-                    }
-                } catch (_: SecurityException) {}
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        try { unregisterReceiver(receiver) } catch (_: Exception) {}
-        try { listenJob?.cancel() } catch (_: Exception) {}
-        try { serverSocket?.close() } catch (_: Exception) {}
-        try { connectedSocket?.close() } catch (_: Exception) {}
-    }
-
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<String>, grantResults: IntArray
     ) {
@@ -180,206 +76,135 @@ class MainActivity : ComponentActivity() {
         if (requestCode == 100 && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
             // Permissions granted
         } else {
-            Toast.makeText(this, "Permissions denied", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Some permissions denied. Mesh may not work correctly.", Toast.LENGTH_SHORT).show()
         }
     }
+}
 
-    @Composable
-    fun BTCommUI() {
-        var message by remember { mutableStateOf("") }
-        val chatMessages = remember { mutableStateListOf<String>() }
-        val scope = rememberCoroutineScope()
-        var isConnected by remember { mutableStateOf(false) }
-        var isListening by remember { mutableStateOf(false) }
+@Composable
+fun MeshApp(viewModel: MeshViewModel) {
+    val messages by viewModel.allMessages.collectAsState(initial = emptyList())
+    val peers by viewModel.allPeers.collectAsState(initial = emptyList())
+    val isBound by viewModel.isServiceBound.collectAsState()
 
-        val setupConnection: (BluetoothSocket, String) -> Unit = { socket, name ->
-            try { connectedSocket?.close() } catch (_: Exception) {}
-            try { serverSocket?.close() } catch (_: Exception) {}
-            listenJob?.cancel()
+    var selectedTab by remember { mutableStateOf(0) }
+    val tabs = listOf("Mesh Chat", "Peers", "SOS")
 
-            connectedSocket = socket
-            outputStream = socket.outputStream
-            inputStream = socket.inputStream
-            isConnected = true
-            isListening = false
-            chatMessages.clear()
-            chatMessages.add("Connection established with $name.")
-
-            scope.launch(Dispatchers.IO) {
-                val buffer = ByteArray(1024)
-                while (true) {
-                    try {
-                        val bytesRead = inputStream?.read(buffer) ?: 0
-                        if (bytesRead > 0) {
-                            val msg = String(buffer, 0, bytesRead)
-                            withContext(Dispatchers.Main) {
-                                chatMessages.add("$name: $msg")
-                            }
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("Mesh Node: ${NodeIdProvider.getNodeId(viewModel.getApplication())}") },
+                actions = {
+                    if (isBound) {
+                        Icon(Icons.Default.Info, contentDescription = "Active", tint = Color.Green)
+                    } else {
+                        Icon(Icons.Default.Info, contentDescription = "Inactive", tint = Color.Red)
+                    }
+                })
+        },
+        bottomBar = {
+            BottomNavigation {
+                tabs.forEachIndexed { index, title ->
+                    BottomNavigationItem(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        label = { Text(title) },
+                        icon = {
+                            if (title == "SOS") Icon(Icons.Default.Warning, "")
+                            else Icon(Icons.Default.Info, "")
                         }
-                    } catch (e: Exception) {
-                        withContext(Dispatchers.Main) {
-                            chatMessages.add("Connection lost: ${e.message}")
-                            isConnected = false
-                        }
-                        break
+                    )
+                }
+            }
+        }
+    ) { padding ->
+        Column(modifier = Modifier.padding(padding)) {
+            when (selectedTab) {
+                0 -> ChatScreen(messages, viewModel)
+                1 -> PeersScreen(peers)
+                2 -> SOSScreen(viewModel)
+            }
+        }
+    }
+}
+
+@Composable
+fun ChatScreen(messages: List<MessageEntity>, viewModel: MeshViewModel) {
+    var text by remember { mutableStateOf("") }
+    var dest by remember { mutableStateOf("broadcast") }
+
+    Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(messages.filter { it.type.name != "SOS" }) { msg ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(4.dp),
+                    elevation = 2.dp
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text("${if (msg.isIncoming) "From" else "To"}: ${msg.senderId}", style = MaterialTheme.typography.caption)
+                        Text(msg.payload)
+                        Text(msg.status.name, style = MaterialTheme.typography.overline, modifier = Modifier.align(Alignment.End))
                     }
                 }
             }
         }
 
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Button(onClick = { checkPermissions { startDiscovery() } }) {
-                    Text("1. Scan & Connect (Client)")
-                }
-
-                Button(
-                    onClick = {
-                        checkPermissions {
-                            if (isConnected) {
-                                chatMessages.add("Disconnect before listening.")
-                                return@checkPermissions
-                            }
-                            isListening = true
-                            chatMessages.add("Started listening for connections...")
-                            startAcceptingConnections(
-                                onSuccess = { socket ->
-                                    setupConnection(socket, "Remote Device")
-                                },
-                                onFail = { errorMsg ->
-                                    isListening = false
-                                    chatMessages.add(errorMsg)
-                                }
-                            )
-                        }
-                    },
-                    enabled = !isListening && !isConnected
-                ) {
-                    Text(if (isListening) "Listening..." else "2. Wait for Connection (Server)")
-                }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextField(value = dest, onValueChange = { dest = it }, label = { Text("Dest ID") }, modifier = Modifier.width(100.dp))
+            Spacer(Modifier.width(8.dp))
+            TextField(value = text, onValueChange = { text = it }, label = { Text("Message") }, modifier = Modifier.weight(1f))
+            Button(onClick = {
+                viewModel.sendMessage(text, dest)
+                text = ""
+            }) {
+                Text("Send")
             }
+        }
+    }
+}
 
-            Spacer(modifier = Modifier.height(16.dp))
+@OptIn(ExperimentalMaterialApi::class)
+@Composable
+fun PeersScreen(peers: List<PeerEntity>) {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        item {
+            Text("Nearby Nodes", style = MaterialTheme.typography.h6, modifier = Modifier.padding(8.dp))
+        }
+        items(peers) { peer ->
+            ListItem(
+                text = { Text(peer.name ?: "Unknown Node") },
+                secondaryText = { Text("${peer.deviceId} - ${if (peer.isOnline) "Online" else "Last seen: " + peer.lastSeen}") },
+                trailing = {
+                    Box(modifier = Modifier.size(12.dp).background(if (peer.isOnline) Color.Green else Color.Gray))
+                }
+            )
             Divider()
-            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+}
 
-            if (!isConnected && !isListening) {
-                Text("Discovered Devices (Select to Connect):", style = MaterialTheme.typography.h6)
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(discoveredDevices) { device ->
-                        Button(onClick = {
-                            scope.launch(Dispatchers.IO) {
+@Composable
+fun SOSScreen(viewModel: MeshViewModel) {
+    var sosMessage by remember { mutableStateOf("EMERGENCY: Need help!") }
 
-                                // Explicit permission check right here
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                                    checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                                    withContext(Dispatchers.Main) {
-                                        chatMessages.add("Error: BLUETOOTH_CONNECT permission missing.")
-                                    }
-                                    return@launch
-                                }
-
-                                // Cancel discovery before connecting
-                                bluetoothAdapter?.cancelDiscovery()
-
-                                try {
-                                    // Explicitly handle SecurityException
-                                    val socket: BluetoothSocket? = try {
-                                        device.createRfcommSocketToServiceRecord(uuid)
-                                    } catch (se: SecurityException) {
-                                        withContext(Dispatchers.Main) {
-                                            chatMessages.add("Security exception creating socket: ${se.message}")
-                                        }
-                                        null
-                                    }
-
-                                    val name: String = try {
-                                        device.name ?: device.address
-                                    } catch (se: SecurityException) {
-                                        device.address
-                                    }
-
-                                    if (socket != null) {
-                                        try {
-                                            socket.connect()
-                                            withContext(Dispatchers.Main) { setupConnection(socket, name) }
-                                        } catch (se: SecurityException) {
-                                            withContext(Dispatchers.Main) {
-                                                chatMessages.add("Security exception connecting: ${se.message}")
-                                            }
-                                        } catch (e: Exception) {
-                                            withContext(Dispatchers.Main) {
-                                                chatMessages.add("Connection failed: ${e.message}")
-                                            }
-                                        }
-                                    }
-
-                                } catch (e: Exception) {
-                                    withContext(Dispatchers.Main) {
-                                        chatMessages.add("Unexpected error: ${e.message}")
-                                    }
-                                }
-                            }
-                        }) {
-                            // Also check permission before accessing name
-                            val name = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                                device.address
-                            } else {
-                                try { device.name ?: device.address } catch (se: SecurityException) { device.address }
-                            }
-                            Text(name)
-                        }
-                    }
-
-
-                }
-            }
-
-            if (isConnected || isListening) {
-                Spacer(modifier = Modifier.height(8.dp))
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(chatMessages) { msg ->
-                        Text(msg)
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
-                }
-            }
-
-            if (isConnected) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row {
-                    TextField(
-                        value = message,
-                        onValueChange = { message = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Type message...") }
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                outputStream?.write(message.toByteArray())
-                                withContext(Dispatchers.Main) {
-                                    chatMessages.add("Me: $message")
-                                    message = ""
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    chatMessages.add("Send failed. Connection broken: ${e.message}")
-                                    isConnected = false
-                                }
-                            }
-                        }
-                    }) {
-                        Text("Send")
-                    }
-                }
-            }
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(100.dp), tint = Color.Red)
+        Spacer(Modifier.height(16.dp))
+        Text("SOS BROADCAST", style = MaterialTheme.typography.h4, color = Color.Red)
+        Spacer(Modifier.height(8.dp))
+        Text("Your message will be relayed through all available phones in the mesh.", style = MaterialTheme.typography.body2)
+        Spacer(Modifier.height(16.dp))
+        TextField(value = sosMessage, onValueChange = { sosMessage = it }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = { viewModel.sendSOS(sosMessage) },
+            colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red, contentColor = Color.White),
+            modifier = Modifier.fillMaxWidth().height(60.dp)
+        ) {
+            Text("SEND SOS", style = MaterialTheme.typography.h5)
         }
     }
 }
