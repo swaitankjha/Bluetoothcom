@@ -15,7 +15,7 @@ class MeshManager(
 ) : TransportListener {
 
     private val TAG = "MeshManager"
-    private val transport: Transport = BluetoothClassicTransport(context, scope)
+    private val transport: Transport = BleTransport(context, scope)
     private val database = AppDatabase.getDatabase(context)
     private val dao = database.meshDao()
 
