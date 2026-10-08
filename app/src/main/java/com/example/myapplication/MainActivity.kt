@@ -8,10 +8,14 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -28,7 +32,7 @@ import com.example.myapplication.data.PeerEntity
 import com.example.myapplication.mesh.NodeIdProvider
 import com.example.myapplication.mesh.PacketType
 import com.example.myapplication.ui.MeshViewModel
-import com.example.myapplication.ui.theme.MyApplicationTheme
+import com.example.myapplication.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -96,25 +100,39 @@ fun MeshApp(viewModel: MeshViewModel) {
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("Chat", "Peers", "SOS Alerts", "Status")
 
+    // Check for recent incoming SOS to show in-app banner alert
+    val latestIncomingSos = remember(messages) {
+        messages.firstOrNull { it.isIncoming && it.type == PacketType.SOS && (System.currentTimeMillis() - it.timestamp < 15000) }
+    }
+    var dismissedSosId by remember { mutableStateOf<String?>(null) }
+    val showSosBanner = latestIncomingSos != null && latestIncomingSos.packetId != dismissedSosId
+
     Scaffold(
+        modifier = Modifier.statusBarsPadding(),
         topBar = {
             TopAppBar(
-                title = { Text("Mesh Node: ${NodeIdProvider.getNodeId(viewModel.getApplication())}") },
+                title = { Text("Mesh Node: ${NodeIdProvider.getNodeId(viewModel.getApplication())}", style = MaterialTheme.typography.subtitle1) },
+                backgroundColor = MaterialTheme.colors.primary,
+                contentColor = MaterialTheme.colors.onPrimary,
                 actions = {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 12.dp)) {
                         Box(
                             modifier = Modifier
                                 .size(10.dp)
-                                .background(if (isBound) Color.Green else Color.Red)
+                                .background(if (isBound) Color.Green else Color.Red, shape = CircleShape)
                         )
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (isBound) "Active" else "Offline", style = MaterialTheme.typography.caption)
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (isBound) "Online" else "Offline", style = MaterialTheme.typography.caption)
                     }
                 }
             )
         },
         bottomBar = {
-            BottomNavigation {
+            BottomNavigation(
+                backgroundColor = MaterialTheme.colors.surface,
+                elevation = 8.dp,
+                modifier = Modifier.navigationBarsPadding()
+            ) {
                 tabs.forEachIndexed { index, title ->
                     BottomNavigationItem(
                         selected = selectedTab == index,
@@ -124,21 +142,57 @@ fun MeshApp(viewModel: MeshViewModel) {
                             when (title) {
                                 "Chat" -> Icon(Icons.Default.Home, "")
                                 "Peers" -> Icon(Icons.Default.Person, "")
-                                "SOS Alerts" -> Icon(Icons.Default.Warning, "", tint = if (selectedTab == index) Color.White else Color.Red)
+                                "SOS Alerts" -> Icon(Icons.Default.Warning, "", tint = if (selectedTab == index) MaterialTheme.colors.error else Color.Red)
                                 "Status" -> Icon(Icons.Default.Info, "")
                             }
-                        }
+                        },
+                        selectedContentColor = MaterialTheme.colors.primary,
+                        unselectedContentColor = Color.Gray
                     )
                 }
             }
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            when (selectedTab) {
-                0 -> ChatScreen(messages, viewModel)
-                1 -> PeersScreen(peers)
-                2 -> SOSFeedScreen(messages, viewModel)
-                3 -> NetworkStatusScreen(peers, isBound, viewModel)
+        Box(modifier = Modifier.padding(padding).fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                when (selectedTab) {
+                    0 -> ChatScreen(messages, viewModel)
+                    1 -> PeersScreen(peers)
+                    2 -> SOSFeedScreen(messages, viewModel)
+                    3 -> NetworkStatusScreen(peers, isBound, viewModel)
+                }
+            }
+
+            // In-App Floating SOS Emergency Alert Banner
+            AnimatedVisibility(
+                visible = showSosBanner,
+                enter = slideInVertically(),
+                exit = slideOutVertically(),
+                modifier = Modifier.align(Alignment.TopCenter).padding(8.dp)
+            ) {
+                if (latestIncomingSos != null) {
+                    Card(
+                        backgroundColor = EmergencyLightRed,
+                        elevation = 8.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Warning, contentDescription = null, tint = EmergencyRed)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("EMERGENCY SOS RECEIVED!", style = MaterialTheme.typography.subtitle1, color = EmergencyRed)
+                                }
+                                TextButton(onClick = { dismissedSosId = latestIncomingSos.packetId }) {
+                                    Text("DISMISS", color = EmergencyRed)
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text("From: ${latestIncomingSos.senderId}", style = MaterialTheme.typography.caption)
+                            Text(latestIncomingSos.payload, style = MaterialTheme.typography.body1, color = Color.Black)
+                        }
+                    }
+                }
             }
         }
     }
@@ -151,29 +205,44 @@ fun ChatScreen(messages: List<MessageEntity>, viewModel: MeshViewModel) {
     val dateFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
 
     Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
-        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             items(messages) { msg ->
                 val isSos = msg.type == PacketType.SOS
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    elevation = 2.dp,
-                    backgroundColor = if (isSos) Color(0xFFFFEBEE) else MaterialTheme.colors.surface
-                ) {
-                    Column(modifier = Modifier.padding(8.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(
-                                "${if (msg.isIncoming) "From" else "To"}: ${msg.senderId}",
-                                style = MaterialTheme.typography.caption,
-                                color = if (isSos) Color.Red else MaterialTheme.colors.primary
-                            )
-                            Text(dateFormat.format(Date(msg.timestamp)), style = MaterialTheme.typography.caption)
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text(msg.payload, style = MaterialTheme.typography.body1)
-                        Spacer(Modifier.height(4.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("TTL: ${msg.ttl}", style = MaterialTheme.typography.overline)
-                            Text(msg.status.name, style = MaterialTheme.typography.overline)
+                val isSent = !msg.isIncoming
+
+                // Distinct styling for sent vs received messages
+                val alignment = if (isSent) Alignment.End else Alignment.Start
+                val bubbleColor = when {
+                    isSos -> EmergencyLightRed
+                    isSent -> SentBubbleColor
+                    else -> ReceivedBubbleColor
+                }
+                val textColor = if (isSos) EmergencyRed else MaterialTheme.colors.onSurface
+
+                Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = alignment) {
+                    Card(
+                        modifier = Modifier.widthIn(max = 300.dp),
+                        elevation = 2.dp,
+                        backgroundColor = bubbleColor,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(
+                                    if (isSent) "You (To: ${msg.destinationId})" else "From: ${msg.senderId}",
+                                    style = MaterialTheme.typography.caption,
+                                    color = if (isSos) EmergencyRed else MaterialTheme.colors.primary
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(dateFormat.format(Date(msg.timestamp)), style = MaterialTheme.typography.caption)
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(msg.payload, style = MaterialTheme.typography.body1, color = textColor)
+                            Spacer(Modifier.height(4.dp))
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("TTL: ${msg.ttl}", style = MaterialTheme.typography.overline)
+                                Text(msg.status.name, style = MaterialTheme.typography.overline)
+                            }
                         }
                     }
                 }
@@ -181,29 +250,37 @@ fun ChatScreen(messages: List<MessageEntity>, viewModel: MeshViewModel) {
         }
 
         Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().imePadding()
+        ) {
             TextField(
                 value = dest,
                 onValueChange = { dest = it },
                 label = { Text("Dest ID") },
-                modifier = Modifier.width(110.dp),
-                singleLine = true
+                modifier = Modifier.width(100.dp),
+                singleLine = true,
+                colors = TextFieldDefaults.textFieldColors(backgroundColor = MaterialTheme.colors.surface)
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
             TextField(
                 value = text,
                 onValueChange = { text = it },
                 label = { Text("Message") },
                 modifier = Modifier.weight(1f),
-                singleLine = true
+                singleLine = true,
+                colors = TextFieldDefaults.textFieldColors(backgroundColor = MaterialTheme.colors.surface)
             )
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = {
-                if (text.isNotBlank()) {
-                    viewModel.sendMessage(text, dest)
-                    text = ""
-                }
-            }) {
+            Spacer(Modifier.width(6.dp))
+            Button(
+                onClick = {
+                    if (text.isNotBlank()) {
+                        viewModel.sendMessage(text, dest)
+                        text = ""
+                    }
+                },
+                elevation = ButtonDefaults.elevation(4.dp)
+            ) {
                 Text("Send")
             }
         }
@@ -220,20 +297,20 @@ fun PeersScreen(peers: List<PeerEntity>) {
         if (peers.isEmpty()) {
             item {
                 Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("No nearby BLE nodes discovered yet.\nEnsure Bluetooth is ON and another device is running the app.", style = MaterialTheme.typography.body2)
+                    Text("No nearby BLE nodes discovered yet.\nEnsure Bluetooth and Location are ON.", style = MaterialTheme.typography.body2, color = Color.Gray)
                 }
             }
         }
         items(peers) { peer ->
             Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), elevation = 2.dp) {
                 ListItem(
-                    text = { Text(peer.name ?: "Unknown Node Device") },
+                    text = { Text(peer.name ?: "Mesh Node Device", style = MaterialTheme.typography.subtitle1) },
                     secondaryText = { Text("ID/MAC: ${peer.deviceId}\nLast seen: ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(peer.lastSeen))}") },
                     trailing = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(if (peer.isOnline) "Online" else "Offline", style = MaterialTheme.typography.caption)
                             Spacer(Modifier.width(6.dp))
-                            Box(modifier = Modifier.size(12.dp).background(if (peer.isOnline) Color.Green else Color.Gray))
+                            Box(modifier = Modifier.size(12.dp).background(if (peer.isOnline) Color.Green else Color.Gray, shape = CircleShape))
                         }
                     }
                 )
@@ -251,27 +328,30 @@ fun SOSFeedScreen(messages: List<MessageEntity>, viewModel: MeshViewModel) {
     Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
         Card(
             modifier = Modifier.fillMaxWidth(),
-            backgroundColor = Color(0xFFFFCDD2),
-            elevation = 4.dp
+            backgroundColor = EmergencyLightRed,
+            elevation = 4.dp,
+            shape = MaterialTheme.shapes.medium
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Warning, contentDescription = null, tint = Color.Red)
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = EmergencyRed)
                     Spacer(Modifier.width(8.dp))
-                    Text("Emergency SOS Broadcast", style = MaterialTheme.typography.h6, color = Color.Red)
+                    Text("Emergency SOS Broadcast", style = MaterialTheme.typography.h6, color = EmergencyRed)
                 }
                 Spacer(Modifier.height(8.dp))
                 TextField(
                     value = sosMessage,
                     onValueChange = { sosMessage = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("SOS Message") }
+                    label = { Text("SOS Message") },
+                    colors = TextFieldDefaults.textFieldColors(backgroundColor = Color.White)
                 )
                 Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = { viewModel.sendSOS(sosMessage) },
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color.Red, contentColor = Color.White),
-                    modifier = Modifier.fillMaxWidth()
+                    colors = ButtonDefaults.buttonColors(backgroundColor = EmergencyRed, contentColor = Color.White),
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = ButtonDefaults.elevation(4.dp)
                 ) {
                     Text("BROADCAST SOS EMERGENCY")
                 }
@@ -282,20 +362,21 @@ fun SOSFeedScreen(messages: List<MessageEntity>, viewModel: MeshViewModel) {
         Text("Received & Sent SOS History", style = MaterialTheme.typography.subtitle1)
         Spacer(Modifier.height(4.dp))
 
-        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             items(sosMessages) { msg ->
+                val isSent = !msg.isIncoming
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     elevation = 2.dp,
-                    backgroundColor = Color(0xFFFFEBEE)
+                    backgroundColor = if (isSent) Color(0xFFFFEBEE) else Color(0xFFFFCDD2)
                 ) {
-                    Column(modifier = Modifier.padding(8.dp)) {
+                    Column(modifier = Modifier.padding(10.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Sender: ${msg.senderId}", style = MaterialTheme.typography.caption, color = Color.Red)
+                            Text("${if (isSent) "You Sent SOS" else "Incoming SOS From"}: ${msg.senderId}", style = MaterialTheme.typography.caption, color = EmergencyRed)
                             Text(dateFormat.format(Date(msg.timestamp)), style = MaterialTheme.typography.caption)
                         }
                         Spacer(Modifier.height(4.dp))
-                        Text(msg.payload, style = MaterialTheme.typography.body1)
+                        Text(msg.payload, style = MaterialTheme.typography.body1, color = Color.Black)
                         Spacer(Modifier.height(4.dp))
                         Text("Relay TTL Remaining: ${msg.ttl} hops", style = MaterialTheme.typography.overline)
                     }
@@ -313,22 +394,22 @@ fun NetworkStatusScreen(peers: List<PeerEntity>, isBound: Boolean, viewModel: Me
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Mesh Network Dashboard", style = MaterialTheme.typography.h5)
         
-        Card(modifier = Modifier.fillMaxWidth(), elevation = 2.dp) {
+        Card(modifier = Modifier.fillMaxWidth(), elevation = 3.dp, shape = MaterialTheme.shapes.medium) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatusRow("My Node ID:", NodeIdProvider.getNodeId(viewModel.getApplication()))
-                StatusRow("Background Service:", if (isBound) "Running & Active" else "Stopped")
+                StatusRow("Background Engine:", if (isBound) "Running & Active" else "Stopped")
                 StatusRow("Transport Protocol:", "BLE (Bluetooth Low Energy)")
                 StatusRow("Max Hops (TTL):", "5 Hops (Store & Forward)")
                 StatusRow("Online Direct Peers:", "$onlineCount online ($totalCount total discovered)")
             }
         }
 
-        Card(modifier = Modifier.fillMaxWidth(), elevation = 2.dp) {
+        Card(modifier = Modifier.fillMaxWidth(), elevation = 3.dp, shape = MaterialTheme.shapes.medium) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("How Mesh Relaying Works:", style = MaterialTheme.typography.subtitle2)
+                Text("How Mesh Relaying Works:", style = MaterialTheme.typography.subtitle2, color = MaterialTheme.colors.primary)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "• Messages automatically hop between intermediary BLE devices if the destination is out of direct range.\n" +
+                    "• Messages automatically hop between intermediary BLE devices if out of direct range.\n" +
                     "• Each relay decreases TTL by 1 (max 5 hops).\n" +
                     "• SOS emergency packets broadcast to all nodes and relay automatically.",
                     style = MaterialTheme.typography.body2
@@ -339,9 +420,9 @@ fun NetworkStatusScreen(peers: List<PeerEntity>, isBound: Boolean, viewModel: Me
 }
 
 @Composable
-fun StatusRow(label: String, value: String) {
+fun StatusRow(label: String, value: String, valueColor: Color = MaterialTheme.colors.onSurface) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, style = MaterialTheme.typography.body2, color = Color.Gray)
-        Text(value, style = MaterialTheme.typography.body2)
+        Text(value, style = MaterialTheme.typography.body2, color = valueColor)
     }
 }

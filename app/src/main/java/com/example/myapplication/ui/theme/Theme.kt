@@ -7,34 +7,37 @@ import androidx.compose.material.lightColors
 import androidx.compose.runtime.Composable
 import androidx.compose.material.Shapes
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-// Dark theme colors
+
 val Shapes = Shapes(
-    small = RoundedCornerShape(4.dp),
-    medium = RoundedCornerShape(8.dp),
-    large = RoundedCornerShape(12.dp)
-)
-private val DarkColorPalette = darkColors(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    background = PurpleGrey40,
-    surface = PurpleGrey80,
-    onPrimary = Purple40,
-    onSecondary = Purple40,
-    onBackground = Purple40,
-    onSurface = Purple40
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(16.dp)
 )
 
-// Light theme colors
 private val LightColorPalette = lightColors(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    background = Purple40,
-    surface = PurpleGrey40,
-    onPrimary = Purple80,
-    onSecondary = Purple80,
-    onBackground = Purple80,
-    onSurface = Purple80
+    primary = PrimaryIndigo,
+    primaryVariant = PrimaryVariantIndigo,
+    secondary = SecondaryTeal,
+    background = BackgroundLight,
+    surface = SurfaceLight,
+    onPrimary = Color.White,
+    onSecondary = Color.White,
+    onBackground = Color(0xFF212121),
+    onSurface = Color(0xFF212121)
+)
+
+private val DarkColorPalette = darkColors(
+    primary = Color(0xFF7986CB),
+    primaryVariant = PrimaryIndigo,
+    secondary = Color(0xFF80CBC4),
+    background = Color(0xFF121212),
+    surface = Color(0xFF1E1E1E),
+    onPrimary = Color.Black,
+    onSecondary = Color.Black,
+    onBackground = Color(0xFFE0E0E0),
+    onSurface = Color(0xFFE0E0E0)
 )
 
 @Composable

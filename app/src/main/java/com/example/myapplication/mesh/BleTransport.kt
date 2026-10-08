@@ -135,7 +135,7 @@ class BleTransport(
                         try {
                             val json = String(value, StandardCharsets.UTF_8)
                             val packet = gson.fromJson(json, MeshPacket::class.java)
-                            Log.d(TAG, "Received packet via BLE GATT from ${device.address}: ${packet.packetId}")
+                            Log.d(TAG, "Received packet via BLE GATT from ${device.address}: ${packet.packetId} (payload=${packet.payload})")
                             listener?.onPacketReceived(packet, device.address)
                             if (responseNeeded) {
                                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
@@ -199,12 +199,9 @@ class BleTransport(
 
     private fun startScanning() {
         if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) return
-        val filter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(SERVICE_UUID))
-            .build()
 
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
         scanCallback = object : ScanCallback() {
@@ -216,8 +213,9 @@ class BleTransport(
                 } catch (e: SecurityException) {
                     null
                 }
-                
-                listener?.onPeerDiscovered(address, name)
+
+                Log.d(TAG, "Discovered BLE peer: $address ($name)")
+                listener?.onPeerDiscovered(address, name ?: "Mesh Device")
                 connectToGatt(device)
             }
 
@@ -233,8 +231,8 @@ class BleTransport(
         }
 
         try {
-            bluetoothLeScanner?.startScan(listOf(filter), settings, scanCallback)
-            Log.d(TAG, "BLE Scan started.")
+            bluetoothLeScanner?.startScan(null, settings, scanCallback)
+            Log.d(TAG, "BLE Scan started (unfiltered for max compatibility).")
         } catch (e: SecurityException) {
             Log.e(TAG, "Security exception starting BLE scan", e)
         }
@@ -253,6 +251,7 @@ class BleTransport(
                         Log.d(TAG, "Connected to GATT server: $address")
                         connectedGattClients[address] = gatt
                         listener?.onPeerConnected(address)
+                        gatt.requestMtu(512)
                         gatt.discoverServices()
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                         Log.d(TAG, "Disconnected from GATT server: $address")
@@ -260,6 +259,10 @@ class BleTransport(
                         gatt.close()
                         listener?.onPeerDisconnected(address)
                     }
+                }
+
+                override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                    Log.d(TAG, "MTU negotiated: $mtu (status=$status)")
                 }
 
                 override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
@@ -286,14 +289,32 @@ class BleTransport(
         val json = gson.toJson(packet)
         val bytes = json.toByteArray(StandardCharsets.UTF_8)
 
-        // 1. Send via GATT client connection if destination is specific or broadcast
+        if (destinationId != "broadcast" && !connectedGattClients.containsKey(destinationId)) {
+            try {
+                val device = bluetoothAdapter?.getRemoteDevice(destinationId)
+                if (device != null) {
+                    connectToGatt(device)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to connect to $destinationId for sending", e)
+            }
+        }
+
         connectedGattClients.forEach { (address, gatt) ->
             if (destinationId == "broadcast" || destinationId == address) {
                 scope.launch(Dispatchers.IO) {
                     try {
                         if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return@launch
-                        val service = gatt.getService(SERVICE_UUID)
-                        val characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
+
+                        // Retry up to 5 times waiting for asynchronous service discovery
+                        var characteristic: BluetoothGattCharacteristic? = null
+                        repeat(5) {
+                            val service = gatt.getService(SERVICE_UUID)
+                            characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
+                            if (characteristic != null) return@repeat
+                            delay(300L)
+                        }
+
                         if (characteristic != null) {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                 gatt.writeCharacteristic(characteristic, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
@@ -303,16 +324,17 @@ class BleTransport(
                                 @Suppress("DEPRECATION")
                                 gatt.writeCharacteristic(characteristic)
                             }
-                            Log.d(TAG, "Sent packet via BLE client to $address")
+                            Log.d(TAG, "Successfully sent packet via BLE client to $address (payload=${packet.payload})")
+                        } else {
+                            Log.e(TAG, "Failed: BLE characteristic not found on $address after retries")
                         }
-                    } catch (e: SecurityException) {
-                        Log.e(TAG, "Security exception writing to BLE characteristic", e)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error writing to BLE characteristic on $address", e)
                     }
                 }
             }
         }
 
-        // 2. Also notify connected server devices if broadcasting
         if (destinationId == "broadcast" && gattServer != null) {
             val service = gattServer?.getService(SERVICE_UUID)
             val characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
@@ -321,6 +343,7 @@ class BleTransport(
                 serverDevices.forEach { device ->
                     try {
                         if (hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                            @Suppress("DEPRECATION")
                             gattServer?.notifyCharacteristicChanged(device, characteristic, false)
                         }
                     } catch (e: SecurityException) {

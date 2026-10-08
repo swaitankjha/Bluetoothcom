@@ -89,6 +89,9 @@ class MeshManager(
     }
 
     private fun attemptSend(packet: MeshPacket) {
+        scope.launch(Dispatchers.IO) {
+            dao.updateMessageStatus(packet.packetId, MessageStatus.FORWARDED.name)
+        }
         if (packet.destinationId == "broadcast") {
             broadcastToNeighbors(packet)
         } else {
@@ -115,27 +118,25 @@ class MeshManager(
         if (seenPackets.contains(packet.packetId)) return
         seenPackets.add(packet.packetId)
 
+        if (packet.senderId == nodeId) return
+
         // Update routing table: senderId can be reached via fromDeviceId
         routingTable[packet.senderId] = fromDeviceId
 
-        when {
-            packet.destinationId == nodeId -> {
-                if (packet.type == PacketType.ACK) {
-                    updateMessageStatus(packet.payload, MessageStatus.DELIVERED)
-                } else {
-                    saveMessage(packet, isIncoming = true)
-                    sendAck(packet)
-                }
-            }
-            packet.destinationId == "broadcast" -> {
+        val isForMe = packet.destinationId == nodeId || packet.destinationId == "broadcast"
+
+        if (isForMe) {
+            if (packet.type == PacketType.ACK) {
+                updateMessageStatus(packet.payload, MessageStatus.DELIVERED)
+            } else {
                 saveMessage(packet, isIncoming = true)
-                if (packet.type == PacketType.SOS) {
-                    relayPacket(packet)
-                }
+                sendAck(packet)
             }
-            else -> {
-                relayPacket(packet)
-            }
+        }
+
+        // Relay if it's a broadcast or meant for another node
+        if (packet.destinationId == "broadcast" || !isForMe) {
+            relayPacket(packet)
         }
     }
 
@@ -157,8 +158,7 @@ class MeshManager(
 
     override fun onPeerDiscovered(deviceId: String, name: String?) {
         scope.launch(Dispatchers.IO) {
-            dao.insertPeer(PeerEntity(deviceId, name, System.currentTimeMillis()))
-            (transport as? BluetoothClassicTransport)?.connectToPeer(deviceId)
+            dao.insertPeer(PeerEntity(deviceId, name, System.currentTimeMillis(), isOnline = true))
         }
     }
 
