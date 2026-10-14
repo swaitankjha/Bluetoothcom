@@ -33,7 +33,7 @@ class MeshManager(
     private fun startStoreAndForwardJob() {
         scope.launch(Dispatchers.IO) {
             while (isActive) {
-                delay(30000) // Every 30 seconds
+                delay(10000) // Every 10 seconds for rapid store-and-forward retry
                 val queuedMessages = dao.getQueuedMessages()
                 queuedMessages.forEach { msg ->
                     val packet = MeshPacket(
@@ -90,16 +90,21 @@ class MeshManager(
 
     private fun attemptSend(packet: MeshPacket) {
         scope.launch(Dispatchers.IO) {
-            dao.updateMessageStatus(packet.packetId, MessageStatus.FORWARDED.name)
-        }
-        if (packet.destinationId == "broadcast") {
-            broadcastToNeighbors(packet)
-        } else {
-            val nextHop = routingTable[packet.destinationId]
-            if (nextHop != null) {
-                transport.sendPacket(packet, nextHop)
+            val onlinePeers = dao.getOnlinePeers()
+            if (onlinePeers.isNotEmpty()) {
+                dao.updateMessageStatus(packet.packetId, MessageStatus.FORWARDED.name)
+                if (packet.destinationId == "broadcast") {
+                    broadcastToNeighbors(packet)
+                } else {
+                    val nextHop = routingTable[packet.destinationId]
+                    if (nextHop != null) {
+                        transport.sendPacket(packet, nextHop)
+                    } else {
+                        broadcastToNeighbors(packet)
+                    }
+                }
             } else {
-                broadcastToNeighbors(packet)
+                Log.d(TAG, "No online peers for packet ${packet.packetId}. Keeping QUEUED for store-and-forward.")
             }
         }
     }
