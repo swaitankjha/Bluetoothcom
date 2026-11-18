@@ -15,7 +15,7 @@ class MeshManager(
 ) : TransportListener {
 
     private val TAG = "MeshManager"
-    private val transport: Transport = BleTransport(context, scope)
+    private val transport: Transport = NearbyTransport(context, nodeId)
     private val database = AppDatabase.getDatabase(context)
     private val dao = database.meshDao()
 
@@ -90,31 +90,32 @@ class MeshManager(
 
     private fun attemptSend(packet: MeshPacket) {
         scope.launch(Dispatchers.IO) {
-            val onlinePeers = dao.getOnlinePeers()
-            if (onlinePeers.isNotEmpty()) {
+            if (packet.destinationId == "broadcast") {
                 dao.updateMessageStatus(packet.packetId, MessageStatus.FORWARDED.name)
-                if (packet.destinationId == "broadcast") {
+                broadcastToNeighbors(packet)
+            } else {
+                val onlinePeers = dao.getOnlinePeers()
+                val nextHop = routingTable[packet.destinationId]
+                if (nextHop != null) {
+                    dao.updateMessageStatus(packet.packetId, MessageStatus.FORWARDED.name)
+                    transport.sendPacket(packet, nextHop)
+                } else if (onlinePeers.isNotEmpty()) {
+                    dao.updateMessageStatus(packet.packetId, MessageStatus.FORWARDED.name)
                     broadcastToNeighbors(packet)
                 } else {
-                    val nextHop = routingTable[packet.destinationId]
-                    if (nextHop != null) {
-                        transport.sendPacket(packet, nextHop)
-                    } else {
-                        broadcastToNeighbors(packet)
-                    }
+                    Log.d(TAG, "No route or online peers for packet ${packet.packetId}. Keeping QUEUED.")
                 }
-            } else {
-                Log.d(TAG, "No online peers for packet ${packet.packetId}. Keeping QUEUED for store-and-forward.")
             }
         }
     }
 
     private fun broadcastToNeighbors(packet: MeshPacket) {
         scope.launch(Dispatchers.IO) {
-            val onlinePeers = dao.getOnlinePeers()
-            onlinePeers.forEach { peer ->
-                // Don't send back to the node that just sent it to us if we know it
-                transport.sendPacket(packet, peer.deviceId)
+            val allPeers = dao.getAllPeersList()
+            allPeers.forEach { peer ->
+                if (peer.deviceId != packet.senderId) {
+                    transport.sendPacket(packet, peer.deviceId)
+                }
             }
         }
     }
@@ -163,7 +164,7 @@ class MeshManager(
 
     override fun onPeerDiscovered(deviceId: String, name: String?) {
         scope.launch(Dispatchers.IO) {
-            dao.insertPeer(PeerEntity(deviceId, name, System.currentTimeMillis(), isOnline = true))
+            dao.insertPeer(PeerEntity(deviceId, name, System.currentTimeMillis(), isOnline = false))
         }
     }
 
@@ -175,7 +176,7 @@ class MeshManager(
 
     override fun onPeerDisconnected(deviceId: String) {
         scope.launch(Dispatchers.IO) {
-            dao.updatePeerStatus(deviceId, false)
+            dao.updatePeerStatus(deviceId, false,)
         }
     }
 

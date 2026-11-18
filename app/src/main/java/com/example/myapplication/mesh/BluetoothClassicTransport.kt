@@ -21,7 +21,7 @@ class BluetoothClassicTransport(
     private val scope: CoroutineScope
 ) : Transport {
 
-    private val TAG = "BTTransport"
+    private val TAG = "BTClassicTransport"
     private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
     private val uuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
     private val serverName = "MeshBTService"
@@ -46,14 +46,6 @@ class BluetoothClassicTransport(
         startServer()
 
         try {
-            // First check paired (bonded) devices
-            if (hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-                bluetoothAdapter?.bondedDevices?.forEach { device ->
-                    Log.d(TAG, "Found paired device: ${device.name} (${device.address})")
-                    listener?.onPeerDiscovered(device.address, device.name)
-                }
-            }
-
             if (bluetoothAdapter?.isDiscovering == true) {
                 bluetoothAdapter.cancelDiscovery()
             }
@@ -65,7 +57,7 @@ class BluetoothClassicTransport(
             }
             
             val started = bluetoothAdapter?.startDiscovery()
-            Log.d(TAG, "Bluetooth discovery started: $started")
+            Log.d(TAG, "Bluetooth Classic discovery started: $started")
         } catch (e: SecurityException) {
             Log.e(TAG, "Security error during discovery", e)
         }
@@ -90,9 +82,9 @@ class BluetoothClassicTransport(
         isListening = true
         scope.launch(Dispatchers.IO) {
             try {
-                Log.d(TAG, "Starting RFCOMM server socket...")
-                serverSocket = bluetoothAdapter?.listenUsingRfcommWithServiceRecord(serverName, uuid)
-                Log.d(TAG, "RFCOMM server socket listening.")
+                Log.d(TAG, "Starting Insecure RFCOMM server socket...")
+                serverSocket = bluetoothAdapter?.listenUsingInsecureRfcommWithServiceRecord(serverName, uuid)
+                Log.d(TAG, "Insecure RFCOMM server socket listening.")
                 while (isListening) {
                     val socket = serverSocket?.accept()
                     socket?.let { 
@@ -173,9 +165,9 @@ class BluetoothClassicTransport(
                     Log.e(TAG, "Missing BLUETOOTH_CONNECT permission to connect to $deviceId")
                     return@launch
                 }
-                Log.d(TAG, "Connecting to $deviceId...")
-                val socket = device.createRfcommSocketToServiceRecord(uuid)
-                bluetoothAdapter?.cancelDiscovery() // Stop scanning before connecting for better connection speed/stability
+                Log.d(TAG, "Connecting to $deviceId via Insecure RFCOMM...")
+                val socket = device.createInsecureRfcommSocketToServiceRecord(uuid)
+                bluetoothAdapter?.cancelDiscovery()
                 socket.connect()
                 Log.d(TAG, "Successfully connected to $deviceId")
                 handleNewConnection(socket)
@@ -208,6 +200,7 @@ class BluetoothClassicTransport(
                     }
                     Log.d(TAG, "Discovered device via BT scan: ${it.address} ($name)")
                     listener?.onPeerDiscovered(it.address, name)
+                    connectToPeer(it.address)
                 }
             }
         }
@@ -217,4 +210,3 @@ class BluetoothClassicTransport(
         return context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
     }
 }
-

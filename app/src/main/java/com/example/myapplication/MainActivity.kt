@@ -290,18 +290,21 @@ fun ChatScreen(messages: List<MessageEntity>, viewModel: MeshViewModel) {
 @OptIn(ExperimentalMaterialApi::class)
 @Composable
 fun PeersScreen(peers: List<PeerEntity>) {
+    val currentTime = System.currentTimeMillis()
+    val activePeers = peers.filter { it.isOnline || (currentTime - it.lastSeen < 120000) }
+
     LazyColumn(modifier = Modifier.fillMaxSize().padding(8.dp)) {
         item {
-            Text("Discovered BLE Nodes", style = MaterialTheme.typography.h6, modifier = Modifier.padding(bottom = 8.dp))
+            Text("Active Mesh Nodes", style = MaterialTheme.typography.h6, modifier = Modifier.padding(bottom = 8.dp))
         }
-        if (peers.isEmpty()) {
+        if (activePeers.isEmpty()) {
             item {
                 Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("No nearby BLE nodes discovered yet.\nEnsure Bluetooth and Location are ON.", style = MaterialTheme.typography.body2, color = Color.Gray)
+                    Text("No active mesh nodes in range.\nEnsure Bluetooth discovery is running.", style = MaterialTheme.typography.body2, color = Color.Gray)
                 }
             }
         }
-        items(peers) { peer ->
+        items(activePeers) { peer ->
             Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), elevation = 2.dp) {
                 ListItem(
                     text = { Text(peer.name ?: "Mesh Node Device", style = MaterialTheme.typography.subtitle1) },

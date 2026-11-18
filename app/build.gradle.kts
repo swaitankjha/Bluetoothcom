@@ -53,6 +53,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
+    // Google Play Services Nearby Connections API for 100% reliable offline P2P
+    implementation("com.google.android.gms:play-services-nearby:19.3.0")
+
     // Room
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
